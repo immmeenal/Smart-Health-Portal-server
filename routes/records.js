@@ -1,4 +1,3 @@
-// routes/records.js
 import express from "express";
 import sql from "mssql";
 import multer from "multer";
@@ -6,22 +5,28 @@ import { BlobServiceClient } from "@azure/storage-blob";
 import jwt from "jsonwebtoken";
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-// ---------- auth helpers ----------
+// 10 MB limit
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+/* -------------------- Auth helpers -------------------- */
 function auth(req, res, next) {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = jwt.verify(token, process.env.JWT_SECRET); // { user_id, role }
     next();
   } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
-const isRole = (r, ...allowed) =>
-  allowed.map(x => x.toLowerCase()).includes((r || "").toLowerCase());
+
+const isRole = (role, ...allowed) =>
+  allowed.map((r) => r.toLowerCase()).includes((role || "").toLowerCase());
 
 async function getPatientIdForUser(userId) {
   const r = await sql.query`SELECT patient_id FROM Patients WHERE user_id=${userId}`;
@@ -31,6 +36,7 @@ async function getDoctorIdForUser(userId) {
   const r = await sql.query`SELECT doctor_id FROM Doctors WHERE user_id=${userId}`;
   return r.recordset[0]?.doctor_id || null;
 }
+
 function safeName(name = "file") {
   const dot = name.lastIndexOf(".");
   const base = (dot > -1 ? name.slice(0, dot) : name).replace(/[^\w\-]+/g, "_");
@@ -38,37 +44,41 @@ function safeName(name = "file") {
   return `${base}${ext}`;
 }
 
-// ---------- lazy blob client (cached) ----------
+/* -------------------- Lazy Blob client (cached) -------------------- */
 let _containerClient = null;
 async function getContainerClient() {
   if (_containerClient) return _containerClient;
 
-  // Read env at call-time (after dotenv.config has run)
   const connStr =
     process.env.AZURE_STORAGE_CONNECTION_STRING ||
     process.env.STORAGE_CONNECTION_STRING;
 
   if (!connStr) {
     throw new Error(
-      "Missing Azure Blob connection string. Set AZURE_STORAGE_CONNECTION_STRING (preferred) " +
-      "or STORAGE_CONNECTION_STRING in your .env"
+      "Missing Azure Blob connection string. Set AZURE_STORAGE_CONNECTION_STRING (preferred) or STORAGE_CONNECTION_STRING in your .env"
     );
   }
 
   const containerName = (process.env.AZURE_BLOB_CONTAINER || "medical-files").trim();
-
   const blobServiceClient = BlobServiceClient.fromConnectionString(connStr);
   const containerClient = blobServiceClient.getContainerClient(containerName);
-
-  // Ensure container exists
-  await containerClient.createIfNotExists({ access: "private" });
+  await containerClient.createIfNotExists(); // default is private
 
   _containerClient = containerClient;
   return _containerClient;
 }
 
-// ---------- Upload ----------
-router.post("/records/upload", auth, upload.single("file"), async (req, res) => {
+/* -------------------- Ping (for quick mount test) -------------------- */
+router.get("/ping", (_req, res) => res.json({ ok: true, where: "records" }));
+
+/* -------------------- Upload -------------------- */
+/**
+ * POST /api/records/upload
+ * - Patient: uploads for self (no patientId in form)
+ * - Provider: must include form field `patientId` (Patients.patient_id)
+ * Body: multipart/form-data with key "file"
+ */
+router.post("/upload", auth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
@@ -89,7 +99,9 @@ router.post("/records/upload", auth, upload.single("file"), async (req, res) => 
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
     await blockBlobClient.uploadData(req.file.buffer, {
-      blobHTTPHeaders: { blobContentType: req.file.mimetype || "application/octet-stream" },
+      blobHTTPHeaders: {
+        blobContentType: req.file.mimetype || "application/octet-stream",
+      },
     });
 
     await sql.query`
@@ -97,15 +109,22 @@ router.post("/records/upload", auth, upload.single("file"), async (req, res) => 
       VALUES (${patientId}, ${blockBlobClient.url}, GETUTCDATE(), ${containerClient.containerName})
     `;
 
-    res.json({ message: "Uploaded", url: blockBlobClient.url, record_file: blobName });
+    res.json({
+      message: "Uploaded",
+      url: blockBlobClient.url,
+      record_file: blobName,
+    });
   } catch (err) {
     console.error("Upload error:", err);
     res.status(500).json({ error: "Failed to upload record" });
   }
 });
 
-// ---------- List own files (patient) ----------
-router.get("/patient/records", auth, async (req, res) => {
+/* -------------------- List own files (patient) -------------------- */
+/**
+ * GET /api/records/my
+ */
+router.get("/my", auth, async (req, res) => {
   try {
     if (!isRole(req.user.role, "patient")) {
       return res.status(403).json({ error: "Only patients can view their files" });
@@ -129,8 +148,12 @@ router.get("/patient/records", auth, async (req, res) => {
   }
 });
 
-// ---------- List a patient's files (doctor view) ----------
-router.get("/doctor/patient/:patientId/records", auth, async (req, res) => {
+/* -------------------- List a patient's files (provider) -------------------- */
+/**
+ * GET /api/records/patient/:patientId/records
+ * Only providers; must have an appointment with the patient.
+ */
+router.get("/patient/:patientId/records", auth, async (req, res) => {
   try {
     if (!isRole(req.user.role, "provider")) {
       return res.status(403).json({ error: "Only providers can view patient files" });
@@ -166,8 +189,13 @@ router.get("/doctor/patient/:patientId/records", auth, async (req, res) => {
   }
 });
 
-// ---------- Delete a record ----------
-router.delete("/records/:recordId", auth, async (req, res) => {
+/* -------------------- Delete a record -------------------- */
+/**
+ * DELETE /api/records/:recordId
+ * Patient: can delete own file
+ * Provider: can delete only if they have an appointment with that patient
+ */
+router.delete("/:recordId", auth, async (req, res) => {
   try {
     const recordId = Number(req.params.recordId);
     if (!recordId) return res.status(400).json({ error: "Invalid recordId" });
@@ -195,12 +223,14 @@ router.delete("/records/:recordId", auth, async (req, res) => {
       return res.status(403).json({ error: "Not allowed" });
     }
 
-    // Best-effort blob delete
+    // Try to delete blob (best-effort)
     try {
       const containerClient = await getContainerClient();
-      const blobName = file_path.split("/").pop();
-      const blobClient = containerClient.getBlockBlobClient(blobName);
-      await blobClient.deleteIfExists();
+      const blobName = (file_path || "").split("/").pop();
+      if (blobName) {
+        const blobClient = containerClient.getBlockBlobClient(blobName);
+        await blobClient.deleteIfExists();
+      }
     } catch (e) {
       console.warn("Blob delete warning:", e?.message);
     }

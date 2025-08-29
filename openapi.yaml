@@ -1,0 +1,337 @@
+openapi: 3.0.3
+info:
+  title: Smart Health Portal API
+  version: 1.0.0
+  description: >
+    Backend for appointments, medical records, and role-based access
+    (Patient / Provider). All protected endpoints use Bearer JWT.
+
+servers:
+  - url: http://localhost:3000
+    description: Local
+
+tags:
+  - name: Auth
+  - name: Appointments
+  - name: Doctors
+  - name: Patients
+  - name: Records
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Login:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 6 }
+    LoginResponse:
+      type: object
+      properties:
+        token: { type: string }
+        role: { type: string, enum: [patient, provider] }
+        full_name: { type: string }
+    Register:
+      type: object
+      required: [full_name, email, password, user_role]
+      properties:
+        full_name: { type: string }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 6 }
+        phone_number: { type: string, nullable: true }
+        user_role: { type: string, enum: [patient, provider] }
+        specialization: { type: string, nullable: true, description: "Required if role=provider" }
+        dob: { type: string, format: date, nullable: true, description: "Required if role=patient" }
+    Appointment:
+      type: object
+      properties:
+        appointment_id: { type: integer }
+        patient_id: { type: integer }
+        doctor_id: { type: integer }
+        appointment_date: { type: string, format: date-time }
+        status: { type: string, enum: [Scheduled, Completed, Cancelled] }
+    AppointmentCreateMy:
+      type: object
+      required: [doctor_id, date, time]
+      properties:
+        doctor_id: { type: integer }
+        date: { type: string, example: "2025-09-01", description: "YYYY-MM-DD in clinic TZ" }
+        time: { type: string, example: "10:30:00", description: "HH:mm:ss in clinic TZ" }
+    AppointmentUpdate:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [Scheduled, Completed, Cancelled] }
+    MedicalRecord:
+      type: object
+      properties:
+        record_id: { type: integer }
+        patient_id: { type: integer }
+        file_path: { type: string, format: uri }
+        uploaded_at: { type: string, format: date-time }
+        file_name: { type: string }
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user (patient or provider)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Register' }
+      responses:
+        '200': { description: Registered }
+        '400': { description: Bad request }
+        '500': { description: Server error }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and receive JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Login' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { description: Invalid credentials }
+
+  /api/appointments/my:
+    get:
+      tags: [Appointments]
+      summary: Get logged-in patient’s appointments
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: List of appointments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Appointment' }
+        '403': { description: Only patients }
+    post:
+      tags: [Appointments]
+      summary: Book appointment (patient)
+      description: Calls stored procedure `dbo.ScheduleAppointment`. Pass clinic-local date and time.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppointmentCreateMy' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appointment_id: { type: integer }
+        '400': { description: Validation or SP guard failure }
+        '403': { description: Only patients }
+
+  /api/appointments/{id}:
+    put:
+      tags: [Appointments]
+      summary: Update appointment status
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppointmentUpdate' }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      tags: [Appointments]
+      summary: Cancel appointment (soft delete) and remove pending notifications
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Cancelled }
+        '404': { description: Not found }
+
+  /api/doctor/list:
+    get:
+      tags: [Doctors]
+      summary: List doctors for dropdowns
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    doctor_id: { type: integer }
+                    full_name: { type: string }
+                    specialization: { type: string }
+
+  /api/doctor/{id}/availability:
+    get:
+      tags: [Doctors]
+      summary: Doctor working days and booked slots
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doctor_id: { type: integer }
+                  available_days:
+                    type: string
+                    example: "Mon,Wed,Fri"
+                  working_hours:
+                    type: object
+                    properties:
+                      start: { type: string, example: "10:00" }
+                      end:   { type: string, example: "17:00" }
+                      lunch:
+                        type: array
+                        items: { type: string }
+                        example: ["14:00","15:00"]
+                  booked:
+                    type: array
+                    items: { type: string, format: date-time }
+
+  /api/doctor/patients:
+    get:
+      tags: [Doctors]
+      summary: Patients for the logged-in provider (only those who have appointments with this doctor)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    patient_id: { type: integer }
+                    full_name:  { type: string }
+                    gender:     { type: string, nullable: true }
+
+  /api/doctor/patient/{patientId}/appointments:
+    get:
+      tags: [Doctors]
+      summary: Appointments for this patient with the logged-in doctor
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: patientId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Appointment' }
+
+  /api/doctor/patient/{patientId}/records:
+    get:
+      tags: [Doctors]
+      summary: Medical records of this patient (doctor must be associated via an appointment)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: patientId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MedicalRecord' }
+
+  /api/patient/records:
+    get:
+      tags: [Patients]
+      summary: List own medical records
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MedicalRecord' }
+
+  /api/records/upload:
+    post:
+      tags: [Records]
+      summary: Upload a medical file
+      description: >
+        Patients upload for themselves.
+        Providers can upload for a patient by passing `patientId` (form field).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                patientId:
+                  type: integer
+                  nullable: true
+      responses:
+        '200': { description: Uploaded }
+
+  /api/records/{recordId}:
+    delete:
+      tags: [Records]
+      summary: Delete a medical record
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: recordId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Deleted }
+        '403': { description: Not allowed }
