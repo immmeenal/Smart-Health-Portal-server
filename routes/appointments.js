@@ -226,38 +226,52 @@ router.put("/:id", auth, async (req, res) => {
    DELETE /api/appointments/:id
    Soft cancel appointment + clear unsent notifications
    ========================================================= */
+// CANCEL (soft-delete) an appointment and remove pending notifications
 router.delete("/:id", auth, async (req, res) => {
+  const apptId = Number(req.params.id);
+  if (!apptId) return res.status(400).json({ error: "Invalid appointment id" });
+
   const tx = new sql.Transaction();
   try {
     await tx.begin();
-    const request = new sql.Request(tx);
 
-    // 1) mark as cancelled
-    const upd = await request.query`
-      UPDATE Appointments SET status = 'Cancelled'
-      WHERE appointment_id = ${req.params.id};
-      SELECT @@ROWCOUNT AS affected;
-    `;
-    const affected = upd.recordset?.[0]?.affected || 0;
-    if (affected === 0) {
-      await tx.rollback();
-      return res.status(404).json({ error: "Appointment not found" });
+    // 1) mark as Cancelled
+    {
+      const r1 = new sql.Request(tx);
+      r1.input("id", sql.Int, apptId);
+      const upd = await r1.query(`
+        UPDATE Appointments
+        SET status = 'Cancelled'
+        WHERE appointment_id = @id;
+
+        SELECT @@ROWCOUNT AS affected;
+      `);
+      const affected = upd.recordset?.[0]?.affected || 0;
+      if (affected === 0) {
+        await tx.rollback();
+        return res.status(404).json({ error: "Appointment not found" });
+      }
     }
 
-    // 2) delete any "pending" (unsent) notifications (if you log them before sending)
-    await request.query`
-      DELETE FROM Notifications
-      WHERE appointment_id = ${req.params.id}
-        AND (sent_at IS NULL)  -- adjust to your schema semantics
-    `;
+    // 2) remove NOT YET sent notifications for this appt (so reminders don't fire)
+    {
+      const r2 = new sql.Request(tx);
+      r2.input("id", sql.Int, apptId);
+      await r2.query(`
+        DELETE FROM Notifications
+        WHERE appointment_id = @id
+          AND (sent_at IS NULL)            -- only pending/unsent
+      `);
+    }
 
     await tx.commit();
     res.json({ message: "Appointment cancelled" });
   } catch (err) {
-    await tx.rollback().catch(() => {});
+    try { await tx.rollback(); } catch {}
     console.error("Cancel error:", err);
     res.status(500).json({ error: "Failed to cancel appointment" });
   }
 });
+
 
 export default router;
