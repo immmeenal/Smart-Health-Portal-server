@@ -1,6 +1,7 @@
 // index.js
 import "dotenv/config";
-
+import swaggerUi from "swagger-ui-express";
+import { swaggerSpec } from "./swagger.js";
 import express from "express";
 import sql from "mssql";
 import multer from "multer";
@@ -13,7 +14,9 @@ import doctorRoutes from "./routes/doctors.js";
 import patientRoutes from "./routes/patients.js";
 import appointmentRoutes from "./routes/appointments.js";
 import recordsRoutes from "./routes/records.js";
-import { sendEmail } from "./utils/email.js";
+import { initEmail } from "./utils/email.js";
+initEmail();
+
 
 import { authenticate } from "./middleware/auth.js"; 
 
@@ -30,6 +33,10 @@ app.use("/api/patient", patientRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/records", recordsRoutes);
 
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  swaggerOptions: { persistAuthorization: true }
+}));
+app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 
 // DB config
 const config = {
@@ -82,61 +89,60 @@ app.post("/api/records/upload", upload.single("file"), async (req, res) => {
 // ⏰ Notification Job
 // ⏰ Daily reminder job — runs at 09:00 server time
 cron.schedule("0 9 * * *", async () => {
-  console.log("🔔 Running daily reminder job...");
-
   try {
-    // Find tomorrow's appointments that are still 'Scheduled' and not already reminded
-    const result = await sql.query`
-      SELECT 
-        a.appointment_id,
-        a.appointment_date,
-        pu.email         AS patient_email,
-        pu.full_name     AS patient_name,
-        du.full_name     AS doctor_name
+    // Appointments scheduled for "tomorrow" (UTC compare)
+    const res = await sql.query`
+      SELECT a.appointment_id, a.appointment_date,
+             pu.email       AS patient_email,
+             pu.full_name   AS patient_name,
+             du.full_name   AS doctor_name
       FROM Appointments a
-      JOIN Patients p ON a.patient_id = p.patient_id
-      JOIN Users pu   ON p.user_id    = pu.user_id
-      JOIN Doctors d  ON a.doctor_id  = d.doctor_id
-      JOIN Users du   ON d.user_id    = du.user_id
-      LEFT JOIN Notifications n 
-        ON n.appointment_id = a.appointment_id
-       AND n.notification_type = 'reminder'
-      WHERE a.status = 'Scheduled'
-        AND CAST(a.appointment_date AS DATE) = CAST(DATEADD(day, 1, GETDATE()) AS DATE)
-        AND n.appointment_id IS NULL
+      JOIN Patients p  ON a.patient_id = p.patient_id
+      JOIN Users pu    ON p.user_id    = pu.user_id
+      JOIN Doctors d   ON a.doctor_id  = d.doctor_id
+      JOIN Users du    ON d.user_id    = du.user_id
+      WHERE CAST(a.appointment_date AS DATE) = CAST(DATEADD(day, 1, GETUTCDATE()) AS DATE)
+        AND a.status = 'Scheduled'
+        AND NOT EXISTS (
+          SELECT 1 FROM Notifications n
+          WHERE n.appointment_id = a.appointment_id
+            AND n.status = 'Sent'
+            AND n.sent_at >= DATEADD(day, -2, a.appointment_date) -- don't resend reminders
+        )
     `;
 
-    for (const row of result.recordset) {
+    for (const appt of res.recordset) {
+      let sentOK = false;
       try {
-        // Format in IST (adjust if your clinic timezone is different)
-        const whenIST = new Intl.DateTimeFormat("en-IN", {
-          timeZone: "Asia/Kolkata",
-          year: "numeric", month: "long", day: "numeric",
-          hour: "numeric", minute: "2-digit"
-        }).format(new Date(row.appointment_date));
-
-        await sendEmail(
-          row.patient_email,
-          "Appointment Reminder",
-          `<p>Hi ${row.patient_name || "there"},</p>
-           <p>This is a reminder about your appointment with 
-           <b>${row.doctor_name || "your doctor"}</b> tomorrow at <b>${whenIST} (IST)</b>.</p>
-           <p>— Smart Health Portal</p>`
-        );
-
-        // Mark as reminded so we don't send again
-        await sql.query`
-          INSERT INTO Notifications (appointment_id, notification_type, sent_at)
-          VALUES (${row.appointment_id}, 'reminder', SYSUTCDATETIME())
-        `;
-
-        console.log(`✅ Reminder sent for appointment ${row.appointment_id}`);
+        await sendEmail({
+          to: appt.patient_email,
+          subject: `Reminder: Appointment tomorrow with ${appt.doctor_name}`,
+          html: `
+            <p>Hi ${appt.patient_name},</p>
+            <p>This is a reminder for your appointment with <b>${appt.doctor_name}</b> on 
+            <b>${new Date(appt.appointment_date).toLocaleString('en-IN',{ timeZone: 'Asia/Kolkata' })}</b>.</p>
+            <p>See you soon.</p>
+          `,
+        });
+        sentOK = true;
       } catch (e) {
-        console.error(`⚠️  Failed to send reminder for appt ${row.appointment_id}:`, e.message);
+        console.warn("Reminder email send failed:", e?.message || e);
+      }
+
+      if (sentOK) {
+        await sql.query`
+          INSERT INTO Notifications (appointment_id, sent_at, status)
+          VALUES (${appt.appointment_id}, GETUTCDATE(), 'Sent')
+        `;
+      } else {
+        await sql.query`
+          INSERT INTO Notifications (appointment_id, sent_at, status)
+          VALUES (${appt.appointment_id}, NULL, 'Failed')
+        `;
       }
     }
-  } catch (err) {
-    console.error("❌ Reminder job error:", err);
+  } catch (e) {
+    console.error("Reminder cron error:", e?.message || e);
   }
 });
 

@@ -1,50 +1,52 @@
 // utils/email.js
 import { EmailClient } from "@azure/communication-email";
 
-let emailClient = null;
+let client = null;
 let fromAddress = null;
 
-function ensureClient() {
-  if (!emailClient) {
-    const conn = process.env.ACS_CONNECTION_STRING;
-    const from = process.env.EMAIL_FROM;
-    fromAddress = from;
-    if (conn && from) {
-      emailClient = new EmailClient(conn);
-      console.log("📧 Email client initialized");
-    } else {
-      console.warn("⚠️ Email client not configured. Set ACS_CONNECTION_STRING and EMAIL_FROM.");
-    }
-  }
-  return { emailClient, fromAddress };
-}
+export function initEmail() {
+  const conn = process.env.ACS_CONNECTION_STRING;
+  fromAddress = process.env.EMAIL_FROM;
 
-export async function sendEmail(to, subject, html) {
-  const { emailClient, fromAddress } = ensureClient();
-  if (!emailClient || !fromAddress) {
-    console.warn("⚠️ sendEmail skipped — missing config");
+  if (!conn || !fromAddress) {
+    console.warn(
+      "⚠️  Email disabled: missing ACS_CONNECTION_STRING or EMAIL_FROM in .env"
+    );
+    client = null;
     return;
   }
 
+  client = new EmailClient(conn);
+  console.log("📧 Email client initialized");
+}
+
+export async function sendEmail({ to, subject, html, text }) {
+  if (!client) throw new Error("Email client not configured");
+  if (!fromAddress) throw new Error("EMAIL_FROM is not configured");
+
+  // Normalize & validate inputs to avoid ".replace of undefined" type errors
+  const toList = Array.isArray(to) ? to : [to];
+  const cleanTo = toList
+    .map(v => (v ?? "").toString().trim())
+    .filter(v => v.length > 0);
+
+  const cleanSubject = (subject ?? "").toString();
+  const bodyHtml = (html ?? text ?? "").toString();
+
+  if (cleanTo.length === 0) throw new Error("Missing 'to' email address");
+  if (!cleanSubject) throw new Error("Missing email subject");
+  if (!bodyHtml) throw new Error("Missing email body");
+
   const message = {
-    senderAddress: fromAddress,
-    content: {
-      subject,
-      html,
-      plainText: html.replace(/<[^>]+>/g, " ")
-    },
-    recipients: { to: [{ address: to }] }
+    senderAddress: fromAddress, // e.g. DoNotReply@<your-managed-domain>.azurecomm.net
+    recipients: { to: cleanTo.map(a => ({ address: a })) },
+    content: { subject: cleanSubject, html: bodyHtml }
   };
 
-  try {
-    const poller = await emailClient.beginSend(message);
-    const result = await poller.pollUntilDone();
-    if (result.status === "Succeeded") {
-      console.log(`✅ Email sent to ${to}`);
-    } else {
-      console.error(`❌ Email send status: ${result.status}`);
-    }
-  } catch (err) {
-    console.error("❌ Email send error:", err);
-  }
+  // helpful debug line (safe to keep during setup)
+  // console.log("Email payload:", JSON.stringify(message, null, 2));
+
+  const poller = await client.beginSend(message);
+  const result = await poller.pollUntilDone();
+  return result;
 }
