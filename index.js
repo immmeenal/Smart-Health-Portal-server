@@ -30,8 +30,8 @@ const dbConfig = {
   database: process.env.SQL_DB,
   options: {
     encrypt: true,
-    trustServerCertificate: false
-  }
+    trustServerCertificate: false,
+  },
 };
 
 try {
@@ -55,12 +55,14 @@ app.use("/api/records", recordsRoutes);
 app.use(
   "/api-docs",
   swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, { swaggerOptions: { persistAuthorization: true } })
+  swaggerUi.setup(swaggerSpec, {
+    swaggerOptions: { persistAuthorization: true },
+  })
 );
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 
 // Optional health check
-app.get("/", (_req, res) => res.send("Smart Health backend is running.")); 
+app.get("/", (_req, res) => res.send("Smart Health backend is running."));
 
 /* -------------------- Daily reminder cron -------------------- */
 /**
@@ -103,8 +105,12 @@ cron.schedule(
             subject: `Reminder: Appointment tomorrow with ${appt.doctor_name}`,
             html: `
               <p>Hi ${appt.patient_name},</p>
-              <p>This is a reminder for your appointment with <b>${appt.doctor_name}</b> on 
-              <b>${new Date(appt.appointment_date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</b>.</p>
+              <p>This is a reminder for your appointment with <b>${
+                appt.doctor_name
+              }</b> on 
+              <b>${new Date(appt.appointment_date).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+              })}</b>.</p>
               <p>See you soon.</p>
             `,
           });
@@ -134,4 +140,6 @@ cron.schedule(
 
 /* -------------------- Start server -------------------- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Backend running on http://localhost:${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Backend running on http://localhost:${PORT}`)
+);

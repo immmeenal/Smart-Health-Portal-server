@@ -47,12 +47,41 @@ router.get("/:id/availability", async (req, res) => {
     res.json({
       doctor_id: doctor.doctor_id,
       available_days: doctor.available_days,
-      working_hours: { start: "10:00", end: "17:00", lunch: ["14:00","15:00"] },
-      booked: apptRes.recordset.map(a => a.appointment_date)
+      working_hours: {
+        start: "10:00",
+        end: "17:00",
+        lunch: ["14:00", "15:00"],
+      },
+      booked: apptRes.recordset.map((a) => a.appointment_date),
     });
   } catch (err) {
     console.error("❌ Availability error:", err.message);
     res.status(500).json({ error: "Failed to fetch availability" });
+  }
+});
+
+/* Provider: their own profile */
+router.get("/me", authenticate, authorizeRole("Provider"), async (req, res) => {
+  try {
+    const result = await sql.query`
+        SELECT 
+          u.full_name,
+          u.email,
+          u.phone_number,
+          d.specialization,
+          d.available_days,
+          d.experience_years
+        FROM Doctors d
+        JOIN Users u ON d.user_id = u.user_id
+        WHERE d.user_id = ${req.user.user_id}
+      `;
+    if (!result.recordset.length) {
+      return res.status(404).json({ error: "Doctor profile not found" });
+    }
+    res.json(result.recordset[0]);
+  } catch (err) {
+    console.error("❌ Doctor /me error:", err.message);
+    res.status(500).json({ error: "Failed to load profile" });
   }
 });
 
