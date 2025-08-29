@@ -76,53 +76,62 @@ router.post("/my", auth, async (req, res) => {
     if (!appointment_id) return res.status(500).json({ error: "SP did not return appointment_id" });
 
     // === Send confirmation email (best effort) & log Notification ===
-    try {
-      // gather names/emails
-      const info = await sql.query`
-        SELECT 
-          a.appointment_id,
-          a.appointment_date,
-          pu.email         AS patient_email,
-          pu.full_name     AS patient_name,
-          du.full_name     AS doctor_name
-        FROM Appointments a
-        JOIN Patients p ON a.patient_id = p.patient_id
-        JOIN Users pu   ON p.user_id    = pu.user_id
-        JOIN Doctors d  ON a.doctor_id  = d.doctor_id
-        JOIN Users du   ON d.user_id    = du.user_id
-        WHERE a.appointment_id = ${appointment_id}
-      `;
-      const row = info.recordset[0];
-      const to = row?.patient_email;
+// inside routes/appointments.js, after you get appointment_id
+try {
+  const info = await sql.query`
+    SELECT 
+      u.email       AS patient_email,
+      u.full_name   AS patient_name,
+      a.appointment_date,
+      du.full_name  AS doctor_name
+    FROM Appointments a
+    JOIN Patients p   ON a.patient_id = p.patient_id
+    JOIN Users u      ON p.user_id    = u.user_id
+    JOIN Doctors d    ON a.doctor_id  = d.doctor_id
+    JOIN Users du     ON d.user_id    = du.user_id
+    WHERE a.appointment_id = ${appointment_id}
+  `;
 
-      if (to) {
-        // format IST for email display
-        const whenIST = new Intl.DateTimeFormat("en-IN", {
-          timeZone: "Asia/Kolkata",
-          year: "numeric", month: "long", day: "numeric",
-          hour: "numeric", minute: "2-digit"
-        }).format(new Date(row.appointment_date));
+  const row = info.recordset[0];
+  const toEmail  = (row?.patient_email ?? "").toString().trim();
+  const docName  = (row?.doctor_name   ?? "").toString();
+  const patName  = (row?.patient_name  ?? "").toString();
+  const whenIST  = new Date(row?.appointment_date)
+    .toLocaleString("en-IN",{ timeZone: "Asia/Kolkata" });
 
-        await sendEmail(
-          to,
-          "Appointment Confirmation",
-          `<p>Hi ${row?.patient_name || ""},</p>
-           <p>Your appointment with <b>${row?.doctor_name || "your doctor"}</b>
-           has been booked for <b>${whenIST} (IST)</b>.</p>
-           <p>Status: <b>Scheduled</b></p>
-           <p>— Smart Health Portal</p>`
-        );
+  let sentOK = false;
 
-        // record notification so we don't double-send
-        await sql.query`
-          INSERT INTO Notifications (appointment_id, notification_type, sent_at)
-          VALUES (${appointment_id}, 'confirmation', SYSUTCDATETIME())
-        `;
-      }
-    } catch (e) {
-      console.error("⚠️  Confirmation email failed:", e.message);
-      // continue; booking succeeded even if email failed
-    }
+  try {
+    await sendEmail({
+      to: toEmail,
+      subject: `Appointment Confirmed with ${docName}`,
+      html: `
+        <p>Hi ${patName || "there"},</p>
+        <p>Your appointment with <b>${docName || "our provider"}</b> is confirmed for 
+        <b>${whenIST}</b>.</p>
+        <p>Thanks!</p>
+      `
+    });
+    sentOK = true;
+  } catch (e) {
+    console.warn("Confirmation email send failed:", e?.message || e);
+  }
+
+  if (sentOK) {
+    await sql.query`
+      INSERT INTO Notifications (appointment_id, sent_at, status)
+      VALUES (${appointment_id}, GETUTCDATE(), 'Sent')
+    `;
+  } else {
+    await sql.query`
+      INSERT INTO Notifications (appointment_id, sent_at, status)
+      VALUES (${appointment_id}, NULL, 'Failed')
+    `;
+  }
+} catch (e) {
+  console.warn("⚠️ Confirmation logging failed:", e?.message || e);
+}
+
 
     return res.status(201).json({ appointment_id });
   } catch (err) {
