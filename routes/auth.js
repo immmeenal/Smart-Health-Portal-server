@@ -8,11 +8,20 @@ const router = express.Router();
 
 // REGISTER
 router.post("/register", async (req, res) => {
-  const { full_name, email, password, phone_number, user_role, specialization, dob } = req.body;
+  const {
+    full_name,
+    email,
+    password,
+    phone_number,
+    user_role,
+    specialization,
+    dob,
+  } = req.body;
 
   try {
     // 1. Check if email exists
-    const checkUser = await sql.query`SELECT * FROM Users WHERE email = ${email}`;
+    const checkUser =
+      await sql.query`SELECT * FROM Users WHERE email = ${email}`;
     if (checkUser.recordset.length > 0) {
       return res.status(400).json({ error: "Email already exists" });
     }
@@ -36,25 +45,33 @@ router.post("/register", async (req, res) => {
 
     // 5. Insert into Doctors
     // inside POST /register after you obtained userId
-if (user_role === "Provider") {
-  // accept what the UI sent; fall back only if truly empty
-  const avail = (req.body.available_days || "").trim() || "Mon,Wed,Fri";
-  const exp   = Number(req.body.experience_years) || 0;
-  const spec  = req.body.specialization || "General";
+    if (role === "Provider") {
+      // accept what the UI sent; fall back only if truly empty
+      const avail = (req.body.available_days || "").trim() || "Mon,Wed,Fri";
+      const exp = Number(req.body.experience_years) || 0;
+      const spec = req.body.specialization || "General";
 
-  await sql.query`
+      await sql.query`
     INSERT INTO Doctors (user_id, specialization, experience_years, available_days, created_at)
     VALUES (${userId}, ${spec}, ${exp}, ${avail}, GETDATE())
   `;
-}
-
+    }
 
     // 6. Insert into Patients
     if (role === "Patient") {
+      const { dob, gender, address, emergency_contact } = req.body;
+
       await sql.query`
-        INSERT INTO Patients (user_id, date_of_birth, gender, address, emergency_contact, created_at)
-        VALUES (${userId}, ${dob || "1990-01-01"}, 'Unknown', 'N/A', 'N/A', GETDATE())
-      `;
+    INSERT INTO Patients (user_id, date_of_birth, gender, address, emergency_contact, created_at)
+    VALUES (
+      ${userId},
+      ${dob || "1990-01-01"},
+      ${gender || "Unknown"},
+      ${address || "N/A"},
+      ${emergency_contact || "N/A"},
+      GETDATE()
+    )
+  `;
     }
 
     res.json({ message: "User registered successfully", user_id: userId });
@@ -63,7 +80,6 @@ if (user_role === "Provider") {
     res.status(500).json({ error: "Failed to register user" });
   }
 });
-
 
 // LOGIN
 router.post("/login", async (req, res) => {
@@ -111,7 +127,7 @@ router.post("/login", async (req, res) => {
       role: user.user_role,
       full_name: user.full_name,
       user_id: user.user_id,
-      ...extraInfo
+      ...extraInfo,
     });
   } catch (err) {
     console.error("❌ Login Error:", err);
