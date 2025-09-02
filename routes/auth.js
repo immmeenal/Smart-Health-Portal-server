@@ -8,15 +8,7 @@ const router = express.Router();
 
 // REGISTER
 router.post("/register", async (req, res) => {
-  const {
-    full_name,
-    email,
-    password,
-    phone_number,
-    user_role,
-    specialization,
-    dob,
-  } = req.body;
+  const { full_name, email, password, phone_number, user_role } = req.body;
 
   try {
     // 1. Check if email exists
@@ -59,13 +51,13 @@ router.post("/register", async (req, res) => {
 
     // 6. Insert into Patients
     if (role === "Patient") {
-      const { dob, gender, address, emergency_contact } = req.body;
+      const { date_of_birth, gender, address, emergency_contact } = req.body;
 
       await sql.query`
     INSERT INTO Patients (user_id, date_of_birth, gender, address, emergency_contact, created_at)
     VALUES (
       ${userId},
-      ${dob || "1990-01-01"},
+      ${date_of_birth},
       ${gender || "Unknown"},
       ${address || "N/A"},
       ${emergency_contact || "N/A"},
