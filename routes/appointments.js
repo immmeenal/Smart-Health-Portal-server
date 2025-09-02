@@ -18,7 +18,7 @@ function auth(req, res, next) {
   }
 }
 const isRole = (role, ...allowed) =>
-  allowed.map(r => r.toLowerCase()).includes((role || "").toLowerCase());
+  allowed.map((r) => r.toLowerCase()).includes((role || "").toLowerCase());
 
 /* ----------------- Utils ----------------- */
 const pad = (n) => String(n).padStart(2, "0");
@@ -31,15 +31,22 @@ function splitToDateAndTime(dateStr, timeStr) {
   const m = t.match(/^(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) throw new Error("Invalid time; expected HH:mm or HH:mm:ss");
 
-  const hh = Number(m[1]), mm = Number(m[2]), ss = Number(m[3]);
+  const hh = Number(m[1]),
+    mm = Number(m[2]),
+    ss = Number(m[3]);
   if (hh > 23 || mm > 59 || ss > 59) throw new Error("Invalid time components");
 
   // IMPORTANT: return timeOnly as PLAIN STRING (avoid TZ conversions)
-  return { dateOnly: dateStr, timeOnly: `${pad(hh)}:${pad(mm)}:${pad(ss)}`, dbgTime: t };
+  return {
+    dateOnly: dateStr,
+    timeOnly: `${pad(hh)}:${pad(mm)}:${pad(ss)}`,
+    dbgTime: t,
+  };
 }
 
 async function getPatientIdForUser(userId) {
-  const r = await sql.query`SELECT patient_id FROM Patients WHERE user_id=${userId}`;
+  const r =
+    await sql.query`SELECT patient_id FROM Patients WHERE user_id=${userId}`;
   return r.recordset[0]?.patient_id || null;
 }
 
@@ -51,16 +58,21 @@ async function getPatientIdForUser(userId) {
 router.post("/my", auth, async (req, res) => {
   try {
     if (!isRole(req.user.role, "Patient")) {
-      return res.status(403).json({ error: "Only patients can book appointments" });
+      return res
+        .status(403)
+        .json({ error: "Only patients can book appointments" });
     }
 
     const { doctor_id, date, time } = req.body;
     if (!doctor_id || !date || !time) {
-      return res.status(400).json({ error: "doctor_id, date, and time are required" });
+      return res
+        .status(400)
+        .json({ error: "doctor_id, date, and time are required" });
     }
 
     const patient_id = await getPatientIdForUser(req.user.user_id);
-    if (!patient_id) return res.status(404).json({ error: "Patient record not found" });
+    if (!patient_id)
+      return res.status(404).json({ error: "Patient record not found" });
 
     const { dateOnly, timeOnly } = splitToDateAndTime(date, time);
 
@@ -73,12 +85,15 @@ router.post("/my", auth, async (req, res) => {
       .execute("dbo.ScheduleAppointment");
 
     const appointment_id = result.recordset?.[0]?.appointment_id;
-    if (!appointment_id) return res.status(500).json({ error: "SP did not return appointment_id" });
+    if (!appointment_id)
+      return res
+        .status(500)
+        .json({ error: "SP did not return appointment_id" });
 
     // === Send confirmation email (best effort) & log Notification ===
-// inside routes/appointments.js, after you get appointment_id
-try {
-  const info = await sql.query`
+    // inside routes/appointments.js, after you get appointment_id
+    try {
+      const info = await sql.query`
     SELECT 
       u.email       AS patient_email,
       u.full_name   AS patient_name,
@@ -92,46 +107,61 @@ try {
     WHERE a.appointment_id = ${appointment_id}
   `;
 
-  const row = info.recordset[0];
-  const toEmail  = (row?.patient_email ?? "").toString().trim();
-  const docName  = (row?.doctor_name   ?? "").toString();
-  const patName  = (row?.patient_name  ?? "").toString();
-  const whenIST  = new Date(row?.appointment_date)
-    .toLocaleString("en-IN",{ timeZone: "Asia/Kolkata" });
+      const row = info.recordset[0];
+      const toEmail = (row?.patient_email ?? "").toString().trim();
+      const docName = (row?.doctor_name ?? "").toString();
+      const patName = (row?.patient_name ?? "").toString();
+      function fmtClinic(dt) {
+        const d = new Date(dt);
+        // subtract 5h30m
+        d.setMinutes(d.getMinutes() - 330);
+        return new Intl.DateTimeFormat("en-IN", {
+          timeZone: "Asia/Kolkata",
+          year: "numeric",
+          month: "numeric",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        }).format(d);
+      }
 
-  let sentOK = false;
+      const whenIST = fmtClinic(row?.appointment_date);
 
-  try {
-    await sendEmail({
-      to: toEmail,
-      subject: `Appointment Confirmed with ${docName}`,
-      html: `
+      let sentOK = false;
+
+      try {
+        await sendEmail({
+          to: toEmail,
+          subject: `Appointment Confirmed with ${docName}`,
+          html: `
         <p>Hi ${patName || "there"},</p>
-        <p>Your appointment with <b>${docName || "our provider"}</b> is confirmed for 
+        <p>Your appointment with <b>${
+          docName || "our provider"
+        }</b> is confirmed for 
         <b>${whenIST}</b>.</p>
         <p>Thanks!</p>
-      `
-    });
-    sentOK = true;
-  } catch (e) {
-    console.warn("Confirmation email send failed:", e?.message || e);
-  }
+      `,
+        });
+        sentOK = true;
+      } catch (e) {
+        console.warn("Confirmation email send failed:", e?.message || e);
+      }
 
-  if (sentOK) {
-    await sql.query`
+      if (sentOK) {
+        await sql.query`
       INSERT INTO Notifications (appointment_id, sent_at, status)
       VALUES (${appointment_id}, GETUTCDATE(), 'Sent')
     `;
-  } else {
-    await sql.query`
+      } else {
+        await sql.query`
       INSERT INTO Notifications (appointment_id, sent_at, status)
       VALUES (${appointment_id}, NULL, 'Failed')
     `;
-  }
-} catch (e) {
-  console.warn("⚠️ Confirmation logging failed:", e?.message || e);
-}
-
+      }
+    } catch (e) {
+      console.warn("⚠️ Confirmation logging failed:", e?.message || e);
+    }
 
     return res.status(201).json({ appointment_id });
   } catch (err) {
@@ -142,7 +172,8 @@ try {
     if ([50001, 50002, 50003, 50004, 50005, 50006].includes(num)) {
       return res.status(400).json({ error: msg });
     }
-    if (num === 547) { // FK errors
+    if (num === 547) {
+      // FK errors
       return res.status(400).json({ error: msg });
     }
     console.error("❌ Create /my error:", err);
@@ -164,7 +195,8 @@ router.get("/my", auth, async (req, res) => {
     const p = await sql.query`
       SELECT patient_id FROM Patients WHERE user_id = ${req.user.user_id}
     `;
-    if (!p.recordset.length) return res.status(404).json({ error: "Patient not found" });
+    if (!p.recordset.length)
+      return res.status(404).json({ error: "Patient not found" });
     const patient_id = p.recordset[0].patient_id;
 
     // IMPORTANT: return appointment_date plus a pre-formatted IST string
@@ -191,7 +223,6 @@ router.get("/my", auth, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch appointments" });
   }
 });
-
 
 /* =========================================================
    PUT /api/appointments/:id
@@ -267,11 +298,12 @@ router.delete("/:id", auth, async (req, res) => {
     await tx.commit();
     res.json({ message: "Appointment cancelled" });
   } catch (err) {
-    try { await tx.rollback(); } catch {}
+    try {
+      await tx.rollback();
+    } catch {}
     console.error("Cancel error:", err);
     res.status(500).json({ error: "Failed to cancel appointment" });
   }
 });
-
 
 export default router;
