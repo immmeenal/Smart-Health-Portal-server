@@ -185,6 +185,7 @@ router.post("/my", auth, async (req, res) => {
    GET /api/appointments/my
    Logged-in patient's appointments
    ========================================================= */
+
 // routes/appointments.js (GET /api/appointments/my)
 router.get("/my", auth, async (req, res) => {
   try {
@@ -221,6 +222,33 @@ router.get("/my", auth, async (req, res) => {
   } catch (err) {
     console.error("❌ My appointments error:", err);
     res.status(500).json({ error: "Failed to fetch appointments" });
+  }
+});
+//fetch booked slots for a given doctor & date
+// routes/appointments.js
+router.get("/doctor/:doctorId/booked", auth, async (req, res) => {
+  try {
+    const doctorId = Number(req.params.doctorId);
+    const { date } = req.query; // YYYY-MM-DD
+
+    if (!doctorId || !date) {
+      return res.status(400).json({ error: "doctorId and date are required" });
+    }
+
+    // get all appointments for that doctor on that date (not cancelled)
+    const result = await sql.query`
+      SELECT appointment_date
+      FROM Appointments
+      WHERE doctor_id = ${doctorId}
+        AND CAST(appointment_date AS date) = ${date}
+        AND status != 'Cancelled'
+    `;
+
+    // return raw datetime values (backend UTC)
+    res.json(result.recordset.map((r) => r.appointment_date));
+  } catch (err) {
+    console.error("❌ Fetch booked slots error:", err);
+    res.status(500).json({ error: "Failed to fetch booked slots" });
   }
 });
 
