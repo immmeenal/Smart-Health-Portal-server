@@ -252,6 +252,49 @@ router.get("/doctor/:doctorId/booked", auth, async (req, res) => {
   }
 });
 
+router.get("/doctor/appointments", auth, async (req, res) => {
+  try {
+    // step 1: map logged in user → doctor_id
+    const docRes = await sql.query`
+      SELECT doctor_id 
+      FROM Doctors 
+      WHERE user_id = ${req.user.user_id}
+    `;
+    if (!docRes.recordset.length) {
+      return res.status(403).json({ error: "Not a valid doctor" });
+    }
+    const doctorId = docRes.recordset[0].doctor_id;
+
+    const { date } = req.query; // YYYY-MM-DD
+    if (!date) {
+      return res.status(400).json({ error: "date is required" });
+    }
+
+    // // Debug logs
+    // console.log("DoctorId:", doctorId, "Date:", date);
+
+    const result = await sql.query`
+      SELECT a.appointment_id, 
+             a.appointment_date, 
+             a.status,
+             p.patient_id, 
+             u.full_name AS patient_name
+      FROM Appointments a
+      JOIN Patients p ON a.patient_id = p.patient_id
+      JOIN Users u ON p.user_id = u.user_id
+      WHERE a.doctor_id = ${doctorId}
+        AND CAST(a.appointment_date AS DATE) = CAST(${date} AS DATE)
+        AND a.status != 'Cancelled'
+      ORDER BY a.appointment_date ASC
+    `;
+
+    res.json(result.recordset);
+  } catch (err) {
+    console.error("❌ Search appointments error:", err);
+    res.status(500).json({ error: "Failed to fetch appointments" });
+  }
+});
+
 /* =========================================================
    PUT /api/appointments/:id
    Update appointment status
