@@ -1,0 +1,36 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18" # or '20' if you use Node 20 locally
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # Step 4: Skip tests (no tests yet)
+      - name: Skip tests
+        run: echo "No tests defined, skipping..."
+
+      # Step 5: Verify server starts (optional, won’t keep running)
+      - name: Verify start
+        run: node -e "require('./index.js'); console.log('Backend started successfully (test only)')"
