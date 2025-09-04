@@ -27,9 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # Step 4: Skip tests (no tests yet)
-      - name: Skip tests
-        run: echo "No tests defined, skipping..."
+      # Step 4: Run tests (dummy for now)
+      - name: Run tests
+        run: npm test
 
       # Step 5: Verify server starts (optional, won’t keep running)
       - name: Verify start
