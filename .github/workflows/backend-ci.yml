@@ -1,4 +1,4 @@
-name: Backend CI
+name: Backend CI/CD
 
 on:
   push:
@@ -9,8 +9,19 @@ on:
       - main
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
+    env:
+      PORT: ${{ secrets.PORT }}
+      SQL_SERVER: ${{ secrets.SQL_SERVER }}
+      SQL_DB: ${{ secrets.SQL_DB }}
+      SQL_USER: ${{ secrets.SQL_USER }}
+      SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      ACS_CONNECTION_STRING: ${{ secrets.ACS_CONNECTION_STRING }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
 
     steps:
       # Step 1: Checkout repo
@@ -21,16 +32,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18" # or '20' if you use Node 20 locally
+          node-version: 20.x # Match App Service runtime
 
       # Step 3: Install dependencies
       - name: Install dependencies
-        run: npm install
+        run: npm install --production
 
-      # Step 4: Run tests (dummy for now)
+      # Step 4: Run tests
       - name: Run tests
         run: npm test
 
-      # Step 5: Verify code compiles (don’t start server)
-      - name: Verify build
-        run: node --check index.js
+      # Step 5: Azure Login
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Step 6: Deploy to Azure Web App
+      - name: Deploy to Azure WebApp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: healthcareapi # Your App Service name
+          package: .
