@@ -33,4 +33,4 @@ jobs:
 
       # Step 5: Verify server starts (optional, won’t keep running)
       - name: Verify start
-        run: node -e "require('./index.js'); console.log('Backend started successfully (test only)')"
+        run: node --input-type=module -e "import('./index.js').then(() => console.log('Backend started successfully (test only)'))"
