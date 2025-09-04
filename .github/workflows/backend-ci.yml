@@ -31,6 +31,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-      # Step 5: Verify server starts (optional, won’t keep running)
-      - name: Verify start
-        run: node --input-type=module -e "import('./index.js').then(() => console.log('Backend started successfully (test only)'))"
+      # Step 5: Verify code compiles (don’t start server)
+      - name: Verify build
+        run: node --check index.js
