@@ -19,7 +19,14 @@ import { initEmail, sendEmail } from "./utils/email.js"; // init + sender
 
 /* -------------------- App & middleware -------------------- */
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: "https://healthcareblobstorage.z29.web.core.windows.net",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  })
+);
+
 app.use(express.json()); // must be before routes
 
 /* -------------------- DB connection -------------------- */
