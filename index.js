@@ -28,7 +28,7 @@ app.use(
 );
 
 app.use(express.json());
-
+console.log("✅ Routes mounted");
 /* -------------------- DB connection -------------------- */
 const dbConfig = {
   user: process.env.SQL_USER,
