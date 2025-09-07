@@ -329,6 +329,24 @@ router.put("/:id", auth, async (req, res) => {
    Soft cancel appointment + clear unsent notifications
    ========================================================= */
 // CANCEL (soft-delete) an appointment and remove pending notifications
+/* ----------------- Time helpers ----------------- */
+function addISTOffset(date) {
+  const d = new Date(date);
+  d.setMinutes(d.getMinutes() + 330); // +5h30m
+  return d;
+}
+
+function formatIST(date) {
+  return new Intl.DateTimeFormat("en-IN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(addISTOffset(date));
+}
+
 // CANCEL (soft-delete) an appointment and remove pending notifications
 router.delete("/:id", auth, async (req, res) => {
   const apptId = Number(req.params.id);
@@ -387,11 +405,7 @@ router.delete("/:id", auth, async (req, res) => {
 
     const row = info.recordset[0];
     if (row) {
-      const whenIST = new Date(row.appointment_date).toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata",
-        dateStyle: "long",
-        timeStyle: "short",
-      });
+      const whenIST = formatIST(row.appointment_date);
 
       try {
         await sendEmail({
