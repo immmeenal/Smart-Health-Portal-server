@@ -332,7 +332,7 @@ router.put("/:id", auth, async (req, res) => {
 /* ----------------- Time helpers ----------------- */
 function addISTOffset(date) {
   const d = new Date(date);
-  d.setMinutes(d.getMinutes() + 330); // +5h30m
+  d.setMinutes(d.getMinutes() - 330); // +5h30m
   return d;
 }
 
