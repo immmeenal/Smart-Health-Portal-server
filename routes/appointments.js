@@ -329,6 +329,7 @@ router.put("/:id", auth, async (req, res) => {
    Soft cancel appointment + clear unsent notifications
    ========================================================= */
 // CANCEL (soft-delete) an appointment and remove pending notifications
+// CANCEL (soft-delete) an appointment and remove pending notifications
 router.delete("/:id", auth, async (req, res) => {
   const apptId = Number(req.params.id);
   if (!apptId) return res.status(400).json({ error: "Invalid appointment id" });
@@ -338,6 +339,7 @@ router.delete("/:id", auth, async (req, res) => {
     await tx.begin();
 
     // 1) mark as Cancelled
+    let affected = 0;
     {
       const r1 = new sql.Request(tx);
       r1.input("id", sql.Int, apptId);
@@ -348,26 +350,65 @@ router.delete("/:id", auth, async (req, res) => {
 
         SELECT @@ROWCOUNT AS affected;
       `);
-      const affected = upd.recordset?.[0]?.affected || 0;
+      affected = upd.recordset?.[0]?.affected || 0;
       if (affected === 0) {
         await tx.rollback();
         return res.status(404).json({ error: "Appointment not found" });
       }
     }
 
-    // 2) remove NOT YET sent notifications for this appt (so reminders don't fire)
+    // 2) remove NOT YET sent notifications
     {
       const r2 = new sql.Request(tx);
       r2.input("id", sql.Int, apptId);
       await r2.query(`
         DELETE FROM Notifications
         WHERE appointment_id = @id
-          AND (sent_at IS NULL)            -- only pending/unsent
+          AND (sent_at IS NULL)
       `);
     }
 
     await tx.commit();
-    res.json({ message: "Appointment cancelled" });
+
+    // 3) Fetch patient + doctor details
+    const info = await sql.query`
+      SELECT 
+        a.appointment_date,
+        pu.email     AS patient_email,
+        pu.full_name AS patient_name,
+        du.full_name AS doctor_name
+      FROM Appointments a
+      JOIN Patients p ON a.patient_id = p.patient_id
+      JOIN Users pu   ON p.user_id    = pu.user_id
+      JOIN Doctors d  ON a.doctor_id  = d.doctor_id
+      JOIN Users du   ON d.user_id    = du.user_id
+      WHERE a.appointment_id = ${apptId}
+    `;
+
+    const row = info.recordset[0];
+    if (row) {
+      const whenIST = new Date(row.appointment_date).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "long",
+        timeStyle: "short",
+      });
+
+      try {
+        await sendEmail({
+          to: row.patient_email,
+          subject: `Appointment with ${row.doctor_name} canceled`,
+          html: `
+            <p>Hi ${row.patient_name},</p>
+            <p>Your appointment with <b>${row.doctor_name}</b> is canceled for <b>${whenIST}</b>.</p>
+            <p>Thanks!</p>
+          `,
+        });
+      } catch (e) {
+        console.warn("❌ Cancel email failed:", e?.message || e);
+      }
+    }
+
+    res.json({ message: "Appointment cancelled and email sent" });
   } catch (err) {
     try {
       await tx.rollback();
