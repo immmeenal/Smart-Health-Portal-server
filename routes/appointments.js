@@ -341,10 +341,7 @@ function formatIST(date) {
     year: "numeric",
     month: "long",
     day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(addISTOffset(date));
+  }).format(new Date(date));
 }
 
 // CANCEL (soft-delete) an appointment and remove pending notifications
