@@ -300,11 +300,11 @@ router.get("/doctor/patient/:patientId", auth, async (req, res) => {
     }
 
     const r = await sql.query`
-      SELECT record_id, file_path, uploaded_at
-      FROM MedicalRecords
-      WHERE patient_id = ${patientId}
-      ORDER BY uploaded_at DESC
-    `;
+  SELECT record_id, file_path, uploaded_at
+  FROM MedicalRecords
+  WHERE patient_id = ${patientId} AND doctor_id = ${myDocId}
+  ORDER BY uploaded_at DESC
+`;
 
     const containerClient = await getContainerClient();
     const rows = r.recordset.map((row) => {
