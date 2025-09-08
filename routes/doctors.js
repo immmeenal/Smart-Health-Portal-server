@@ -141,7 +141,7 @@ router.get(
       const result = await sql.query`
         SELECT appointment_id, appointment_date, status, doctor_id, patient_id
         FROM Appointments
-        WHERE patient_id = ${pid} AND doctor_id = ${doctorId}
+        WHERE patient_id = ${pid} 
         ORDER BY appointment_date DESC
       `;
       res.json(result.recordset);
@@ -160,12 +160,20 @@ router.get(
   async (req, res) => {
     try {
       const pid = Number(req.params.patientId);
+      const d = await sql.query`
+        SELECT doctor_id FROM Doctors WHERE user_id = ${req.user.user_id}
+      `;
+      if (!d.recordset.length) {
+        return res.status(404).json({ error: "Doctor profile not found" });
+      }
+      const doctorId = d.recordset[0].doctor_id;
+
       const result = await sql.query`
         SELECT
           record_id, patient_id, file_path, uploaded_at,
           RIGHT(file_path, CHARINDEX('/', REVERSE(file_path) + '/') - 1) AS file_name
         FROM MedicalRecords
-        WHERE patient_id = ${pid}
+        WHERE patient_id = ${pid} AND doctor_id = ${doctorId}
         ORDER BY uploaded_at DESC
       `;
       res.json(result.recordset);
