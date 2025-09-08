@@ -24,15 +24,27 @@ function auth(req, res, next) {
   }
 }
 const isRole = (r, ...allowed) =>
-  allowed.map(x => x.toLowerCase()).includes((r || "").toLowerCase());
+  allowed.map((x) => x.toLowerCase()).includes((r || "").toLowerCase());
 
 // ---------- DB helpers ----------
 async function getPatientIdForUser(userId) {
-  const r = await sql.query`SELECT patient_id FROM Patients WHERE user_id=${userId}`;
+  const r =
+    await sql.query`SELECT patient_id FROM Patients WHERE user_id=${userId}`;
   return r.recordset[0]?.patient_id || null;
 }
 async function getDoctorIdForUser(userId) {
-  const r = await sql.query`SELECT doctor_id FROM Doctors WHERE user_id=${userId}`;
+  const r =
+    await sql.query`SELECT doctor_id FROM Doctors WHERE user_id=${userId}`;
+  return r.recordset[0]?.doctor_id || null;
+}
+
+async function getDoctorIdByName(name) {
+  const r = await sql.query`
+    SELECT TOP 1 d.doctor_id
+    FROM Doctors d
+    JOIN Users u ON d.user_id = u.user_id
+    WHERE u.full_name = ${name}
+  `;
   return r.recordset[0]?.doctor_id || null;
 }
 
@@ -53,7 +65,7 @@ function getStorageCredsFromEnv() {
   if ((!accountName || !accountKey) && connStr) {
     // Try to parse AccountName/AccountKey from connection string
     const parts = Object.fromEntries(
-      connStr.split(";").map(kv => {
+      connStr.split(";").map((kv) => {
         const [k, ...rest] = kv.split("=");
         return [k?.trim(), rest.join("=").trim()];
       })
@@ -73,23 +85,28 @@ function getStorageCredsFromEnv() {
 async function getContainerClient() {
   if (_containerClient) return _containerClient;
 
-  const { connectionString, accountName, accountKey } = getStorageCredsFromEnv();
+  const { connectionString, accountName, accountKey } =
+    getStorageCredsFromEnv();
   if (!connectionString && !(accountName && accountKey)) {
     throw new Error(
       "Missing Azure Storage credentials. Provide AZURE_STORAGE_CONNECTION_STRING, " +
-      "or AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY."
+        "or AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY."
     );
   }
 
-  const containerName = (process.env.AZURE_BLOB_CONTAINER || "medical-files").trim();
+  const containerName = (
+    process.env.AZURE_BLOB_CONTAINER || "medical-files"
+  ).trim();
 
   let blobServiceClient;
   if (connectionString) {
-    blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+    blobServiceClient =
+      BlobServiceClient.fromConnectionString(connectionString);
   } else {
     // URL defaults to core.windows.net; if you use a different suffix, add AZURE_BLOB_ENDPOINT
     const endpoint =
-      process.env.AZURE_BLOB_ENDPOINT || `https://${accountName}.blob.core.windows.net`;
+      process.env.AZURE_BLOB_ENDPOINT ||
+      `https://${accountName}.blob.core.windows.net`;
     const credential = new StorageSharedKeyCredential(accountName, accountKey);
     blobServiceClient = new BlobServiceClient(endpoint, credential);
   }
@@ -109,7 +126,7 @@ function getSasSigner() {
   if (!accountName || !accountKey) {
     throw new Error(
       "Cannot sign SAS: missing AZURE_STORAGE_ACCOUNT/AZURE_STORAGE_KEY " +
-      "or non-parsable connection string."
+        "or non-parsable connection string."
     );
   }
   _sasSigner = new StorageSharedKeyCredential(accountName, accountKey);
@@ -162,16 +179,26 @@ router.post("/upload", auth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
-    let patientId;
+    let patientId, doctorId;
+
     if (isRole(req.user.role, "patient")) {
       patientId = await getPatientIdForUser(req.user.user_id);
+
+      if (req.body.doctorName) {
+        doctorId = await getDoctorIdByName(req.body.doctorName);
+        if (!doctorId)
+          return res.status(400).json({ error: "Doctor not found" });
+      }
     } else if (isRole(req.user.role, "provider")) {
       patientId = Number(req.body.patientId);
+      doctorId = await getDoctorIdForUser(req.user.user_id);
     } else {
       return res.status(403).json({ error: "Not allowed" });
     }
 
-    if (!patientId) return res.status(400).json({ error: "Missing or invalid patientId" });
+    if (!patientId || !doctorId) {
+      return res.status(400).json({ error: "Missing patient or doctor info" });
+    }
 
     const containerClient = await getContainerClient();
 
@@ -185,18 +212,21 @@ router.post("/upload", auth, upload.single("file"), async (req, res) => {
       },
     });
 
+    // Pick up description if provided
+    const description = req.body.description || null;
+
     await sql.query`
-      INSERT INTO MedicalRecords (patient_id, file_path, uploaded_at, blob_container)
-      VALUES (${patientId}, ${blockBlobClient.url}, GETUTCDATE(), ${containerClient.containerName})
+      INSERT INTO MedicalRecords (patient_id, doctor_id, file_path, description, uploaded_at, blob_container)
+      VALUES (${patientId}, ${doctorId}, ${blockBlobClient.url}, ${description}, GETUTCDATE(), ${containerClient.containerName})
     `;
 
-    // Return a short-lived SAS URL for immediate viewing
     const file_url = createBlobSasUrl(containerClient, blobName, 15);
 
     res.json({
       message: "Uploaded",
       file_url,
       file_name: original,
+      description,
     });
   } catch (err) {
     console.error("Upload error:", err);
@@ -211,10 +241,13 @@ router.post("/upload", auth, upload.single("file"), async (req, res) => {
 router.get("/my", auth, async (req, res) => {
   try {
     if (!isRole(req.user.role, "patient")) {
-      return res.status(403).json({ error: "Only patients can view their files" });
+      return res
+        .status(403)
+        .json({ error: "Only patients can view their files" });
     }
     const pid = await getPatientIdForUser(req.user.user_id);
-    if (!pid) return res.status(404).json({ error: "Patient record not found" });
+    if (!pid)
+      return res.status(404).json({ error: "Patient record not found" });
 
     const r = await sql.query`
       SELECT record_id, file_path, uploaded_at
@@ -224,7 +257,7 @@ router.get("/my", auth, async (req, res) => {
     `;
 
     const containerClient = await getContainerClient();
-    const rows = r.recordset.map(row => {
+    const rows = r.recordset.map((row) => {
       const blobName = row.file_path.split("/").pop();
       const file_url = createBlobSasUrl(containerClient, blobName, 15);
       const file_name = blobName || "file";
@@ -245,14 +278,17 @@ router.get("/my", auth, async (req, res) => {
 router.get("/doctor/patient/:patientId", auth, async (req, res) => {
   try {
     if (!isRole(req.user.role, "provider")) {
-      return res.status(403).json({ error: "Only providers can view patient files" });
+      return res
+        .status(403)
+        .json({ error: "Only providers can view patient files" });
     }
 
     const patientId = Number(req.params.patientId);
     if (!patientId) return res.status(400).json({ error: "Invalid patientId" });
 
     const myDocId = await getDoctorIdForUser(req.user.user_id);
-    if (!myDocId) return res.status(403).json({ error: "Doctor profile not found" });
+    if (!myDocId)
+      return res.status(403).json({ error: "Doctor profile not found" });
 
     // Verify relationship (at least one appointment)
     const rel = await sql.query`
@@ -271,7 +307,7 @@ router.get("/doctor/patient/:patientId", auth, async (req, res) => {
     `;
 
     const containerClient = await getContainerClient();
-    const rows = r.recordset.map(row => {
+    const rows = r.recordset.map((row) => {
       const blobName = row.file_path.split("/").pop();
       const file_url = createBlobSasUrl(containerClient, blobName, 15);
       const file_name = blobName || "file";
@@ -300,21 +336,25 @@ router.delete("/:recordId", auth, async (req, res) => {
       FROM MedicalRecords
       WHERE record_id = ${recordId}
     `;
-    if (!rec.recordset.length) return res.status(404).json({ error: "Record not found" });
+    if (!rec.recordset.length)
+      return res.status(404).json({ error: "Record not found" });
 
     const { patient_id, file_path } = rec.recordset[0];
 
     if (isRole(req.user.role, "patient")) {
       const myPid = await getPatientIdForUser(req.user.user_id);
-      if (myPid !== patient_id) return res.status(403).json({ error: "Not allowed" });
+      if (myPid !== patient_id)
+        return res.status(403).json({ error: "Not allowed" });
     } else if (isRole(req.user.role, "provider")) {
       const myDocId = await getDoctorIdForUser(req.user.user_id);
-      if (!myDocId) return res.status(403).json({ error: "Doctor profile not found" });
+      if (!myDocId)
+        return res.status(403).json({ error: "Doctor profile not found" });
       const hasRel = await sql.query`
         SELECT TOP 1 1 FROM Appointments
         WHERE patient_id = ${patient_id} AND doctor_id = ${myDocId}
       `;
-      if (!hasRel.recordset.length) return res.status(403).json({ error: "Not allowed" });
+      if (!hasRel.recordset.length)
+        return res.status(403).json({ error: "Not allowed" });
     } else {
       return res.status(403).json({ error: "Not allowed" });
     }
@@ -351,22 +391,26 @@ router.get("/signed/:recordId", auth, async (req, res) => {
       FROM MedicalRecords
       WHERE record_id = ${recordId}
     `;
-    if (!rec.recordset.length) return res.status(404).json({ error: "Record not found" });
+    if (!rec.recordset.length)
+      return res.status(404).json({ error: "Record not found" });
 
     const { patient_id, file_path } = rec.recordset[0];
 
     // same authorization rules as DELETE:
     if (isRole(req.user.role, "patient")) {
       const myPid = await getPatientIdForUser(req.user.user_id);
-      if (myPid !== patient_id) return res.status(403).json({ error: "Not allowed" });
+      if (myPid !== patient_id)
+        return res.status(403).json({ error: "Not allowed" });
     } else if (isRole(req.user.role, "provider")) {
       const myDocId = await getDoctorIdForUser(req.user.user_id);
-      if (!myDocId) return res.status(403).json({ error: "Doctor profile not found" });
+      if (!myDocId)
+        return res.status(403).json({ error: "Doctor profile not found" });
       const hasRel = await sql.query`
         SELECT TOP 1 1 FROM Appointments
         WHERE patient_id = ${patient_id} AND doctor_id = ${myDocId}
       `;
-      if (!hasRel.recordset.length) return res.status(403).json({ error: "Not allowed" });
+      if (!hasRel.recordset.length)
+        return res.status(403).json({ error: "Not allowed" });
     } else {
       return res.status(403).json({ error: "Not allowed" });
     }
