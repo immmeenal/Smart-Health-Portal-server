@@ -160,6 +160,7 @@ router.get(
   async (req, res) => {
     try {
       const pid = Number(req.params.patientId);
+      console.log("got record req from ",pid);
       const d = await sql.query`
         SELECT doctor_id FROM Doctors WHERE user_id = ${req.user.user_id}
       `;
@@ -167,7 +168,7 @@ router.get(
         return res.status(404).json({ error: "Doctor profile not found" });
       }
       const doctorId = d.recordset[0].doctor_id;
-
+      console.log("got doc id ",doctorId,"pat: ",pid);
       const result = await sql.query`
         SELECT
           record_id, patient_id, file_path, uploaded_at,
