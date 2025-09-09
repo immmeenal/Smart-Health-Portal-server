@@ -250,7 +250,7 @@ router.get("/my", auth, async (req, res) => {
       return res.status(404).json({ error: "Patient record not found" });
 
     const r = await sql.query`
-      SELECT record_id, file_path, uploaded_at
+      SELECT record_id, file_path, uploaded_at,description
       FROM MedicalRecords
       WHERE patient_id = ${pid}
       ORDER BY uploaded_at DESC
