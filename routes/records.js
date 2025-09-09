@@ -250,11 +250,19 @@ router.get("/my", auth, async (req, res) => {
       return res.status(404).json({ error: "Patient record not found" });
 
     const r = await sql.query`
-      SELECT record_id, file_path, uploaded_at,description
-      FROM MedicalRecords
-      WHERE patient_id = ${pid}
-      ORDER BY uploaded_at DESC
-    `;
+  SELECT 
+    mr.record_id,
+    mr.file_path,
+    mr.uploaded_at,
+    mr.description,
+    u.full_name AS doctor_name
+  FROM MedicalRecords mr
+  LEFT JOIN Doctors d ON mr.doctor_id = d.doctor_id
+  LEFT JOIN Users u ON d.user_id = u.user_id
+  WHERE mr.patient_id = ${pid}
+  ORDER BY mr.uploaded_at DESC
+`;
+
 
     const containerClient = await getContainerClient();
     const rows = r.recordset.map((row) => {
