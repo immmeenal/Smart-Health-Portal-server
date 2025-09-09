@@ -242,6 +242,7 @@ router.get("/doctor/:doctorId/booked", auth, async (req, res) => {
       WHERE doctor_id = ${doctorId}
         AND CAST(appointment_date AS date) = ${date}
         AND status != 'Cancelled'
+        AND appointment_date > GETUTCDATE() -- filter out past times
     `;
 
     // return raw datetime values (backend UTC)
